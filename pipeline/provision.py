@@ -81,10 +81,17 @@ def write_dq_report(config, fact_count, account_count, customer_count):
     start_ts = datetime.strptime(state["run_timestamp"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     duration = int((datetime.now(timezone.utc) - start_ts).total_seconds())
 
+    total_records = int(source_counts.get("transactions_raw", 0))
+    flagged_records = int(sum(i["records_affected"] for i in issues))
+    clean_records = max(total_records - flagged_records, 0)
+    flag_counts = {i["issue_type"]: i["records_affected"] for i in issues}
+
     report = {
         "$schema": "nedbank-de-challenge/dq-report/v1",
         "run_timestamp": state["run_timestamp"],
-        "stage": "auto",
+        "stage": str(config.get("runtime", {}).get("stage", "2")),
+
+        # Official Stage 2 report schema
         "source_record_counts": {
             "accounts_raw": int(source_counts.get("accounts_raw", 0)),
             "transactions_raw": int(source_counts.get("transactions_raw", 0)),
@@ -97,6 +104,12 @@ def write_dq_report(config, fact_count, account_count, customer_count):
             "dim_customers": int(customer_count),
         },
         "execution_duration_seconds": duration,
+
+        # Backward-compatible fields for the older local harness
+        "total_records": total_records,
+        "clean_records": clean_records,
+        "flagged_records": flagged_records,
+        "flag_counts": flag_counts,
     }
 
     os.makedirs(os.path.dirname(dq_report_path), exist_ok=True)

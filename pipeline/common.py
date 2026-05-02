@@ -64,6 +64,10 @@ def save_run_state(state: dict) -> None:
 def create_spark() -> SparkSession:
     cfg = load_config()
     spark_cfg = cfg.get("spark", {})
+
+    spark_local_dir = spark_cfg.get("local_dir", "/data/output/_spark_tmp")
+    ensure_dir(spark_local_dir)
+
     delta_jars = ",".join([
     "/root/.ivy2/jars/io.delta_delta-spark_2.12-3.1.0.jar",
     "/root/.ivy2/jars/io.delta_delta-storage-3.1.0.jar",
@@ -81,7 +85,8 @@ def create_spark() -> SparkSession:
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-        .config("spark.local.dir", spark_cfg.get("local_dir", "/tmp"))
+        .config("spark.local.dir", spark_local_dir)
+        # .config("spark.local.dir", spark_cfg.get("local_dir", "/tmp"))
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.blockManager.port", "0")
