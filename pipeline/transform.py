@@ -239,7 +239,7 @@ def run_transformation():
             "_amount_cast_failed",
             F.col("amount_raw").isNotNull() & F.col("amount").isNull(),
         )
-                .withColumn(
+        .withColumn(
             "_sort_key",
             F.coalesce(
                 F.col("transaction_timestamp"),
@@ -304,12 +304,22 @@ def run_transformation():
     dup_records_affected = scalar_sum(
         deduped
         .filter(F.col("_duplicate_group_count") > 1)
-        .withColumn("_duplicate_excess_count", F.col("_duplicate_group_count") - F.lit(1)),
+        .withColumn(
+            "_duplicate_excess_count",
+            F.col("_duplicate_group_count") - F.lit(1),
+        ),
         "_duplicate_excess_count",
-)
+    )
 
     # Join only against the account key to minimise memory.
-    valid_accounts = accounts.select("account_id").dropDuplicates()
+   
+
+    valid_accounts = (
+        spark.read.format("delta")
+        .load(table_path(silver_root, "accounts"))
+        .select("account_id")
+        .dropDuplicates()
+    )
 
     tx_joined = (
         deduped
