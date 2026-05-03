@@ -202,9 +202,13 @@ def run_provisioning():
     print(f"Writing fact_transactions to {table_path(gold_root, 'fact_transactions')}", flush=True)
     write_delta(fact_transactions, table_path(gold_root, "fact_transactions"))
 
-    customer_count = dim_customers.count()
-    account_count = dim_accounts.count()
-    fact_count = fact_transactions.count()
+    dim_customers_out = spark.read.format("delta").load(table_path(gold_root, "dim_customers"))
+    dim_accounts_out = spark.read.format("delta").load(table_path(gold_root, "dim_accounts"))
+    fact_transactions_out = spark.read.format("delta").load(table_path(gold_root, "fact_transactions"))
+
+    customer_count = dim_customers_out.count()
+    account_count = dim_accounts_out.count()
+    fact_count = fact_transactions_out.count()
 
     write_dq_report(config, fact_count, account_count, customer_count)
 

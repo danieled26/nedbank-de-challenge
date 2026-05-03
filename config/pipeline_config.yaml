@@ -31,11 +31,11 @@ output:
 
 # ── Stage 3 streaming paths ───────────────────────────────────
 # Uncomment and use at Stage 3 only.
-# streaming:
-#   stream_input_path: /data/stream
-#   stream_gold_path: /data/output/stream_gold
-#   poll_interval_seconds: 10
-#   quiesce_timeout_seconds: 60
+streaming:
+  stream_input_path: /data/stream
+  stream_gold_path: /data/output/stream_gold
+  poll_interval_seconds: 10
+  quiesce_timeout_seconds: 60
 
 # ── Spark settings ────────────────────────────────────────────
 # Keep master as local[2] to match the 2-vCPU scoring constraint.
@@ -54,4 +54,4 @@ dq:
   rules_path: /data/config/dq_rules.yaml
 
 runtime:
-  stage: "2"
+  stage: "3"

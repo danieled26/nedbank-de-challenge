@@ -271,16 +271,16 @@ def run_transformation():
     tx_slim = spark.read.format("delta").load(tx_slim_path)
 
     # Count issue categories while the table is narrow and materialised.
+    issue_row = tx_slim.agg(
+        F.sum(F.col("_type_mismatch_issue").cast("int")).alias("amount_type_mismatch"),
+        F.sum(F.col("_date_format_issue").cast("int")).alias("date_format_inconsistency"),
+        F.sum(F.col("_currency_variant_issue").cast("int")).alias("currency_variants"),
+    ).collect()[0]
+
     pre_dedupe_issue_counts = {
-        "amount_type_mismatch": scalar_count(
-            tx_slim.filter(F.col("_type_mismatch_issue"))
-        ),
-        "date_format_inconsistency": scalar_count(
-            tx_slim.filter(F.col("_date_format_issue"))
-        ),
-        "currency_variants": scalar_count(
-            tx_slim.filter(F.col("_currency_variant_issue"))
-        ),
+        "amount_type_mismatch": int(issue_row["amount_type_mismatch"] or 0),
+        "date_format_inconsistency": int(issue_row["date_format_inconsistency"] or 0),
+        "currency_variants": int(issue_row["currency_variants"] or 0),
     }
 
     # Dedupe without row_number window. min_by keeps the earliest event by sort key

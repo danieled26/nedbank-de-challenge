@@ -1,86 +1,83 @@
 # Architecture Decision Record: Stage 3 Streaming Extension
 
-**File:** `adr/stage3_adr.md`
-**Author:** [your name]
-**Date:** [date of submission]
+**File:** `adr/stage3_adr.md`  
+**Author:** Edwin Daniels  
+**Date:** 2026-05-03  
 **Status:** Final
-
----
-
-## Instructions (remove this section before submitting)
-
-This ADR is required at Stage 3. It must be present in your repository at `adr/stage3_adr.md` when you push the `stage3-submission` tag.
-
-The ADR is human-reviewed at the finalist stage and is worth **2 points** out of 100. Scoring:
-- All three questions addressed substantively: **2 points**
-- One or two questions answered superficially: **1 point**
-- ADR absent or none of the questions addressed: **0 points**
-
-**What "substantive" means:** Each question requires a minimum of approximately 100 words of specific, concrete reasoning about your own pipeline. General statements ("I would have made it more modular") do not qualify as substantive. Specific statements do ("I would have separated the schema definition from the transformation logic and placed it in `config/schemas.py`, because when Stage 3 required a new output table I had to modify `transform.py` in three places that all referenced the Gold schema directly").
-
-**What reviewers are looking for:** Evidence that you understand the architectural trade-offs you made, not evidence that you know what good architecture looks like in the abstract. Reference your own code. Name specific files, classes, or design decisions.
-
-Delete these instructions before submitting.
 
 ---
 
 ## Context
 
-[1–2 paragraphs describing the Stage 3 requirement and the constraints you were working within.]
+Stage 3 added a stream source for the virtual account mobile app. The batch pipeline still had to run first, but the app also needed current balances and recent transactions to update from transaction events. The stream input is a set of JSONL micro-batch files under `/data/stream/`. The files are named in chronological order, for example `stream_20260320_143000_0001.jsonl`. The event schema is the same as the Stage 2 transaction JSON, including `merchant_subcategory`.
 
-[Describe: what did the mobile product team need? What did the streaming interface look like — directory of micro-batch JSONL files, delivered to `/data/stream/`, requiring polling? What output tables were required (`current_balances`, `recent_transactions`) and what SLA applied (5-minute lag from file arrival to Gold update)?]
+The new outputs are two Delta tables under `/data/output/stream_gold/`. `current_balances` has one row per valid `account_id`, with `current_balance`, `last_transaction_timestamp`, and `updated_at`. `recent_transactions` keeps recent transaction events by `account_id` and `transaction_id`, with a maximum of 50 transactions per account. The SLA is checked as `updated_at - transaction_timestamp`, and must be no more than 300 seconds.
 
-[Also describe: what was the state of your pipeline coming into Stage 3? Approximately how many lines of code, what structure, what had you changed between Stage 1 and Stage 2?]
+Before Stage 3, the code was already split into batch modules: `pipeline/ingest.py`, `pipeline/transform.py`, `pipeline/provision.py`, `pipeline/common.py`, and `pipeline/run_all.py`. Stage 2 had added DQ handling, `dq_report.json`, `dq_rules.yaml`, quarantine outputs, `merchant_subcategory` support, a slim transaction work table at `/data/output/silver/_work/transactions_slim`, and Spark local spill configuration to use `/data/output/_spark_tmp` instead of `/tmp`. Stage 3 added `pipeline/stream_ingest.py`, stream settings in `pipeline_config.yaml`, and one call to `run_stream_ingestion()` in `run_all.py` after batch provisioning. Final code line counts were: `common.py` 130 lines, `ingest.py` 67 lines, `transform.py` 426 lines, `provision.py` 214 lines, `stream_ingest.py` 230 lines, and `run_all.py` 26 lines.
 
 ---
 
 ## Decision 1: How did your existing Stage 1 architecture facilitate or hinder the streaming extension?
 
-**Minimum: approximately 100 words of specific reasoning about your own pipeline.**
+The Stage 1 structure helped because the batch work was already separated by pipeline stage. `ingest.py` writes Bronze, `transform.py` writes Silver, `provision.py` writes Gold, and `common.py` contains shared Spark, config, path, run-state, and Delta write helpers. Because of that, Stage 3 did not require a rewrite of the batch path. I added `stream_ingest.py` as a separate module and called it from `run_all.py` after `run_provisioning()`. The config pattern also helped. The pipeline was already using `/data/input`, `/data/config`, and `/data/output`, so adding `/data/stream` and `/data/output/stream_gold` fit the existing approach.
 
-[Address at least the following:]
+Stage 2 also helped because the transaction path had already been hardened. `transform.py` already dealt with mixed date formats, amount casting, currency normalisation, `merchant_subcategory`, duplicate transactions, orphaned transactions, and account filtering. The stream input used the same transaction shape, so `stream_ingest.py` followed the same basic rules: build `transaction_timestamp`, cast `amount` to `DECIMAL(18,2)`, normalise currency to `ZAR`, deduplicate by `transaction_id`, and keep only events for accounts in batch `dim_accounts`.
 
-[**What made Stage 3 easier:**]
-[— Which specific design choices in Stage 1 or Stage 2 reduced the work required to add the streaming path. Examples: did you already have a modular ingestion layer that made it easy to add a new input source? Did your Delta MERGE pattern from Stage 2 transfer directly to the streaming upsert logic? Was your config-driven path setup easy to extend with a `/data/stream/` source?]
-
-[**What made Stage 3 harder:**]
-[— Which specific choices created friction. Examples: did you use a monolithic `run_all.py` that combined batch and stream concerns in a way that was difficult to separate? Did you have hardcoded schema assumptions that broke when the new `current_balances` table was introduced? Did your Spark session configuration conflict with the polling loop's concurrency requirements?]
-
-[**Code survival rate:**]
-[— Roughly what fraction of your Stage 1/2 code survived intact into Stage 3? What had to be modified versus extended versus rewritten?]
+The main weakness was that some useful logic was not reusable enough. `transform.py` became large during Stage 2 and contains parsing, DQ checks, deduplication, quarantine handling, and metrics in one file. `stream_ingest.py` repeats some date and currency logic because there is no shared `transactions.py` helper module. `run_all.py` is also very simple. It works for the challenge, but it is not a mode-based orchestrator. It now runs batch and then stream in one sequence. About 80–85% of the Stage 1/2 code survived into Stage 3. The Stage 3 work was mainly additive: one new stream module, a small config update, and one extra call in the entry point.
 
 ---
 
 ## Decision 2: What design decisions in Stage 1 would you change in hindsight?
 
-**Minimum: approximately 100 words of specific, concrete changes.**
+I would move common transaction logic into a shared module. Right now `transform.py` and `stream_ingest.py` both contain similar logic for parsing dates, creating timestamps, casting amounts, and normalising currency. That is not ideal. A better structure would be `pipeline/transactions.py` with functions such as `parse_date_expr`, `normalise_currency_expr`, and `build_transaction_timestamp`. Then both batch and stream processing would use the same code.
 
-[Be specific. "I would have..." followed by a concrete architectural choice and an explanation of why it would have improved Stage 3. General statements are not sufficient.]
+I would also move output schemas into one place. `provision.py` currently defines the Gold output columns inline. `stream_ingest.py` defines the stream output columns separately. This is clear enough for the current challenge, but it creates a risk of schema drift. A small `pipeline/schemas.py` file would make the expected Gold and stream Gold schemas explicit.
 
-[Examples of the level of specificity required:]
-[— "I would have defined my Gold table schemas in a single `config/schemas.py` file rather than inline in `provision.py`. When I needed to add the `current_balances` table in Stage 3, I had to trace schema definitions across three modules."]
-[— "I would have designed `run_all.py` to accept a `--mode` argument (`batch` or `stream`) from the start, rather than adding a branching conditional in Stage 3 that made the entry point harder to reason about."]
-[— "I would not have used `.toPandas()` in my Silver-to-Gold join. It worked at Stage 1 scale but I had to refactor it at Stage 2, and the refactor left technical debt that complicated the Stage 3 streaming path."]
-
-[Describe at least one concrete structural change.]
+Finally, I would make DQ execution more directly driven by `dq_rules.yaml`. The current config defines the issue names and handling actions, and `provision.py` uses it when writing `dq_report.json`, but the detection logic still lives mostly in `transform.py`. A better design would map each DQ rule to a detector and handler function.
 
 ---
 
 ## Decision 3: How would you approach this differently if you had known Stage 3 was coming from the start?
 
-**Minimum: approximately 100 words of forward-looking architectural reasoning.**
+If I had known Stage 3 was coming from the start, I would design the pipeline around a shared transaction event contract. Batch transactions from `/data/input/transactions.jsonl` and stream transactions from `/data/stream/stream_*.jsonl` would both pass through the same normalisation layer. That layer would standardise the schema, parse the date, create `transaction_timestamp`, cast `amount`, normalise currency, and return a common transaction dataframe. The batch and stream paths would then differ only in how they use the cleaned events.
 
-[This is the forward-looking design question. Describe the architecture you would have chosen from Day 1 if the full three-stage specification had been visible to you at the start.]
-
-[Consider addressing:]
-[— **Ingestion patterns:** Would you have designed the ingest layer to accept both batch file paths and streaming directory sources from the beginning? What interface would that look like?]
-[— **State management:** The `current_balances` table requires maintaining running state across stream batches. Would you have chosen a different state management approach if you had known this from Day 1? Delta MERGE, checkpoint files, an embedded key-value store?]
-[— **Output format choices:** Would you have structured your Gold layer differently — for example, using a single `gold/` output module that handles both batch and streaming tables — rather than retrofitting `stream_gold/` as a separate output path?]
-[— **Pipeline entry points:** Would you have used a single entry point with mode selection, or kept batch and streaming as separate executables that share common library code?]
-[— **Anything else** specific to your implementation that would have changed with full visibility.]
+For state, I would still use Delta because the required output format is Delta Parquet and the stream state is small. But I would model state tables from day one. `current_balances` would be an account state table keyed by `account_id`. `recent_transactions` would be a bounded state table keyed by `(account_id, transaction_id)` with a standard last-50 retention function. In this submission the stream files are all available at container start, so the implementation processes them deterministically and writes final state. That is enough for this challenge, but an upfront design would make incremental upsert state the normal path.
 
 ---
 
-## Appendix (optional)
+## Appendix
 
-[Architecture diagram, code snippets, or other supporting material. Not required. Does not substitute for the written responses above. If you include a diagram, describe what it shows in plain text as well — reviewers may not have access to rendering tools.]
+### Final Stage 3 pipeline shape
+
+/data/input/
+  accounts.csv
+  customers.csv
+  transactions.jsonl
+        |
+        v
+pipeline/ingest.py
+  /data/output/bronze/accounts
+  /data/output/bronze/customers
+  /data/output/bronze/transactions
+        |
+        v
+pipeline/transform.py
+  /data/output/silver/accounts
+  /data/output/silver/customers
+  /data/output/silver/transactions
+  /data/output/silver/_work/transactions_slim
+  /data/output/silver/quarantine/null_account_id_accounts
+  /data/output/silver/quarantine/orphaned_transactions
+        |
+        v
+pipeline/provision.py
+  /data/output/gold/dim_accounts
+  /data/output/gold/dim_customers
+  /data/output/gold/fact_transactions
+  /data/output/dq_report.json
+        |
+        v
+pipeline/stream_ingest.py
+  reads /data/stream/stream_*.jsonl
+  writes /data/output/stream_gold/current_balances
+  writes /data/output/stream_gold/recent_transactions

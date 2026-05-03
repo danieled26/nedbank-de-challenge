@@ -16,9 +16,11 @@ or any code that reads from stdin. The container has no TTY attached.
 from pipeline.ingest import run_ingestion
 from pipeline.transform import run_transformation
 from pipeline.provision import run_provisioning
+from pipeline.stream_ingest import run_stream_ingestion
 
 
 if __name__ == "__main__":
     run_ingestion()
     run_transformation()
     run_provisioning()
+    run_stream_ingestion()
